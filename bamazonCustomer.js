@@ -1,57 +1,123 @@
 // Requiring dependencies.
 var mysql = require('mysql');
-var password = require('./password.js');
-var prompt = require('prompt');
+var inquirer = require('inquirer');
 
 // Setting up the connection to mySQL.
 var connection = mysql.createConnection({
 	host: 'localhost',
+	port: 3306,
 	user: 'root',
-	password: '',
-	database: 'products'
+	password: 'root',
+	database: 'bamazon'
 });
 
 // Initializing the mySQL connection and prompt.
-connection.connect();
-prompt.start();
+connection.connect(function(err){
+	console.log("Connected as id: "+connection.threadId);
+	displayInventory();
+})
 
-// Selecting everything from the products table.
-connection.query('SELECT * FROM products', function(err, rows) {
-	if (err) throw err;
-	// Log all the items for sale to the console.
-	for (var i = 0; i < rows.length; i++) {
-		console.log("Item ID: " + rows[i].ItemID + " Name: " + rows[i].ProductName + " Price: $" + rows[i].Price);
-	};
-	var schema = {
-		properties: {
-			itemid: {
-				description: 'What is the ID of the product you want?'
-			},
-			quantity: {
-				description: 'How many would you like?'
-			}
-		}
+// validateInput makes sure that the user is supplying only positive integers for their inputs
+function validateInput(value) {
+	var integer = Number.isInteger(parseFloat(value));
+	var sign = Math.sign(value);
+
+	if (integer && (sign === 1)) {
+		return true;
+	} else {
+		return 'Error: Please enter a whole, non-zero number.';
 	}
-	// Ask the user what they want to buy and how much.
-	prompt.get(schema, function(err, result) {
-		// If the user wants more than in stock quantity tell them we don't have enough.
-		if (rows[result.itemid - 1].StockQuantity < result.quantity) {
-			console.log("Insufficient Quantity");
-		// If not enough stock
-		} else {
-			// Total the amount for the user.
-			var orderPrice = (rows[result.itemid-1].Price * result.quantity);
-			var department = rows[result.itemid-1].DepartmentName;
-			console.log("Order confirmation");
-			console.log("Your order costs: $" + orderPrice);
-			console.log("Thank you!");
-			
-			// Update the stock for the item.
-			var newQuantity = ( rows[result.itemid - 1].StockQuantity - result.quantity);
-			connection.query('UPDATE products SET StockQuantity=' + newQuantity + ' WHERE ItemID=' + result.itemid + ';', function(err, res) {
-				if (err) throw err;
-			});
+}
 
-		};
-	});
-});
+function displayInventory() {
+
+	// Make the db query
+	connection.query("SELECT * FROM products", function(err, data) {
+		if (err) throw err;
+
+		console.log("Existing Inventory: ");
+		console.log("...................");
+
+		var inventoryList = '';
+		for (var i = 0; i < data.length; i++) {
+			inventoryList = '';
+			inventoryList += 'Item ID: ' + data[i].item_id + '  //  ';
+			inventoryList += 'Product Name: ' + data[i].product_name + '  //  ';
+			inventoryList += 'Department: ' + data[i].department_name + '  //  ';
+			inventoryList += 'Price: $' + data[i].price + '\n';
+
+			console.log(inventoryList);
+		}
+
+	  	console.log("---------------------------------------------------------------------\n");
+
+	  	// Prompt the user for item/quantity they would like to purchase
+	  	promptUserPurchase();
+	})
+};
+
+// promptUserPurchase will prompt the user for the item/quantity they would like to purchase
+function promptUserPurchase() {
+
+	// Prompt the user to select an item
+	inquirer.prompt([
+		{
+			type: 'input',
+			name: 'item_id',
+			message: 'Please enter the Item ID which you would like to purchase.',
+			validate: validateInput,
+			filter: Number
+		},
+		{
+			type: 'input',
+			name: 'quantity',
+			message: 'How many do you need?',
+			validate: validateInput,
+			filter: Number
+		}
+	]).then(function(input) {
+
+		var item = input.item_id;
+		var quantity = input.quantity;
+
+		connection.query('SELECT * FROM products WHERE ?', {item_id: item}, function(err, data) {
+			if (err) throw err;
+
+			// If the user has selected an invalid item ID, data array will be empty
+			if (data.length === 0) {
+				console.log('ERROR: Invalid Item ID. Please select a valid Item ID.');
+				displayInventory();
+
+			} else {
+				var productData = data[0];
+				
+				// If the quantity requested by the user is in stock
+				if (quantity <= productData.stock_quantity) {
+					console.log('Good news, the product you requested is in stock and your order is placed!');
+
+					// Updating query string
+					var updateInventory = 'UPDATE products SET stock_quantity = ' + (productData.stock_quantity - quantity) + ' WHERE item_id = ' + item;
+
+					// Update the inventory
+					connection.query(updateInventory, function(err, data) {
+						if (err) throw err;
+
+						console.log('Your order has been placed and your total is $' + productData.price * quantity);
+						console.log('Thank you for your order!');
+						console.log("---------------------------------------------------------------------");
+
+						// End the database connection
+						connection.end();
+					})
+				} else {
+					console.log('Sorry, there is not enough product in stock and your order cannot be placed.');
+					console.log('Please modify your order.');
+					console.log("---------------------------------------------------------------------");
+
+					displayInventory();
+				}
+			}
+		})
+	})
+};
+
